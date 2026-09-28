@@ -14,6 +14,7 @@ from app.github.client import GitHubClient
 from app.utils import audit
 from app.utils.comments import find_bot_comment
 from app.utils.logger import get_logger
+from app.utils.pr_checks import commits_have_signoff, is_test_file
 from app.utils.safe_regex import bounded_match
 
 log = get_logger("workflow.pullrequest")
@@ -27,11 +28,6 @@ LABEL_FAIL = "quality: ❌ needs work"
 MAX_PATHS_QUERIED = 5
 COMMITS_PER_PATH = 30
 MAX_RECOMMENDATIONS = 2
-
-
-_SIGNED_OFF_RE = re.compile(
-    r"^Signed-off-by:\s+\S.*<[^<>\s]+@[^<>\s]+>\s*$", re.IGNORECASE | re.MULTILINE
-)
 
 
 class QualityCheck:
@@ -157,6 +153,19 @@ class PullRequestWorkflow:
                 _cached_files = await self._gh.list_pr_files(owner, repo, pr_number, inst)
             return _cached_files
 
+        _cached_commits: list[dict] | None = None
+
+        async def get_commits() -> list[dict]:
+            nonlocal _cached_commits
+            if _cached_commits is None:
+                try:
+                    _cached_commits = await self._gh.list_pr_commits(
+                        owner, repo, pr_number, inst
+                    )
+                except Exception:
+                    _cached_commits = []
+            return _cached_commits
+
         # Linked issue
         if gates.require_linked_issue:
             body = pr.get("body") or ""
@@ -178,19 +187,7 @@ class PullRequestWorkflow:
         # Tests
         if gates.require_tests:
             files = await get_files()
-            test_pats = [
-                re.compile(p)
-                for p in [
-                    r"(?:^|/)[^/]*\.test\.[jt]sx?$",
-                    r"(?:^|/)[^/]*\.spec\.[jt]sx?$",
-                    r"(?:^|/)(?:tests?|__tests__)/",
-                    r"(?:^|/)test_[^/]*\.py$",
-                    r"(?:^|/)[^/]*_test\.py$",
-                ]
-            ]
-            has_tests = any(
-                any(p.search(f["filename"]) for p in test_pats) for f in files
-            )
+            has_tests = any(is_test_file(f["filename"]) for f in files)
             checks.append(
                 QualityCheck(
                     "Tests",
@@ -206,7 +203,7 @@ class PullRequestWorkflow:
         # DCO
         if gates.require_dco:
             sha = pr.get("head", {}).get("sha", "")
-            passed = await self._check_dco(ctx, pr, sha)
+            passed = await self._check_dco(ctx, pr, sha, await get_commits())
             checks.append(
                 QualityCheck(
                     "DCO Sign-off",
@@ -221,7 +218,7 @@ class PullRequestWorkflow:
 
         # GPG
         if gates.require_gpg_signature:
-            commits = await self._gh.list_pr_commits(owner, repo, pr_number, inst)
+            commits = await get_commits()
             signed = all(
                 (c.get("commit") or {}).get("verification", {}).get("verified")
                 for c in commits
@@ -291,20 +288,14 @@ class PullRequestWorkflow:
 
         return checks
 
-    async def _check_dco(self, ctx: dict, pr: dict, sha: str) -> bool:
+    async def _check_dco(
+        self, ctx: dict, pr: dict, sha: str, commits: list[dict]
+    ) -> bool:
         """DCO passes if every non-merge commit carries a Signed-off-by trailer,
         or (fallback) a DCO commit status reports success."""
-        owner, repo, inst = ctx["owner"], ctx["repo"], ctx["installation_id"]
-        try:
-            commits = await self._gh.list_pr_commits(owner, repo, pr["number"], inst)
-        except Exception:
-            commits = []
-        relevant = [c for c in commits if len(c.get("parents") or []) <= 1]
-        if relevant and all(
-            _SIGNED_OFF_RE.search((c.get("commit") or {}).get("message") or "")
-            for c in relevant
-        ):
+        if commits_have_signoff(commits):
             return True
+        owner, repo, inst = ctx["owner"], ctx["repo"], ctx["installation_id"]
         return await self._check_status(owner, repo, sha, "DCO", inst)
 
     async def _check_status(
