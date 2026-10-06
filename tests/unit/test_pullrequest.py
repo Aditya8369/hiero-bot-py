@@ -645,3 +645,16 @@ async def test_commits_fetched_once_when_dco_and_gpg_both_enabled(mock_gh, ctx):
     assert mock_gh.list_pr_commits.await_count == 1
     assert next(c for c in checks if c.name == "DCO Sign-off").passed is True
     assert next(c for c in checks if c.name == "GPG Signature").passed is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_val", [None, {}, {"login": ""}])
+async def test_handle_pr_opened_handles_missing_or_ghost_author(mock_gh, ctx, user_val):
+    wf = PullRequestWorkflow(mock_gh)
+    payload = make_payload()
+    payload["pull_request"]["user"] = user_val
+
+    await wf.handle_pr_opened(ctx, payload)
+    mock_gh.list_pr_files.assert_not_awaited()
+    mock_gh.post_comment.assert_not_awaited()
+
