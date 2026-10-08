@@ -220,7 +220,7 @@ class PullRequestWorkflow:
         if gates.require_gpg_signature:
             commits = await get_commits()
             signed = bool(commits) and all(
-                bool((c.get("commit") or {}).get("verification", {}).get("verified"))
+                (c.get("commit") or {}).get("verification", {}).get("verified")
                 for c in commits
             )
             checks.append(
