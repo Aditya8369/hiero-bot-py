@@ -131,7 +131,7 @@ class ConfigLoader:
     @staticmethod
     def _parse(slug: str, raw_b64: str) -> RepoConfig:
         try:
-            raw = base64.b64decode(raw_b64, validate=True)
+            raw = base64.b64decode(raw_b64)
         except (binascii.Error, ValueError) as exc:
             raise ConfigInvalid(
                 slug,
@@ -141,8 +141,7 @@ class ConfigLoader:
         if len(raw) > _MAX_CONFIG_BYTES:
             raise ConfigInvalid(
                 slug,
-                f"file is {len(raw)} bytes, over the "
-                f"{_MAX_CONFIG_BYTES}-byte limit",
+                f"file is {len(raw)} bytes, over the {_MAX_CONFIG_BYTES}-byte limit",
             )
 
         try:
@@ -174,8 +173,7 @@ class ConfigLoader:
             config = RepoConfig.model_validate(data)
         except ValidationError as exc:
             detail = "; ".join(
-                f"{'.'.join(str(part) for part in error['loc'])}: "
-                f"{error['msg']}"
+                f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
                 for error in exc.errors()[:5]
             )
 
@@ -208,11 +206,7 @@ class ConfigLoader:
         key: str,
         config: RepoConfig | None,
     ) -> None:
-        ttl = (
-            _CACHE_TTL
-            if config is not None
-            else _NEGATIVE_CACHE_TTL
-        )
+        ttl = _CACHE_TTL if config is not None else _NEGATIVE_CACHE_TTL
 
         self._cache[key] = _CacheEntry(
             config=config,
@@ -246,9 +240,7 @@ class ConfigLoader:
         return {
             "entries": len(self._cache),
             "configured": sum(
-                1
-                for entry in self._cache.values()
-                if entry.config is not None
+                1 for entry in self._cache.values() if entry.config is not None
             ),
             "hits": self._hits,
             "misses": self._misses,
